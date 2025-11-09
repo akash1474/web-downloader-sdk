@@ -1,6 +1,6 @@
 import { EventEmitter } from "./events";
 import { DownloadTask } from "./DownloadTask";
-import { wait } from "./utils";
+import { wait } from "./utils"; // 'wait' is no longer used, could be removed
 
 export class DownloaderQueue extends EventEmitter {
   private queue: DownloadTask[] = [];
@@ -16,7 +16,9 @@ export class DownloaderQueue extends EventEmitter {
   add(task: DownloadTask) {
     this.queue.push(task);
     this.emit("queueAdd", task);
-    if (this.running) this.run();
+    if (this.running) {
+      this.run();
+    }
   }
 
   start() {
@@ -29,11 +31,14 @@ export class DownloaderQueue extends EventEmitter {
   pause() {
     this.running = false;
     this.emit("pause");
+    // We also pause active tasks, but tasks in the queue are just "not started"
     this.active.forEach((t) => t.pause());
   }
 
   clear() {
     this.queue = [];
+    // Also cancel active tasks
+    this.active.forEach((t) => t.cancel());
     this.active = [];
     this.running = false;
     this.emit("clear");
@@ -46,28 +51,47 @@ export class DownloaderQueue extends EventEmitter {
       this.queue.length > 0
     ) {
       const task = this.queue.shift()!;
+
+      // Don't start a task that was canceled while in queue
+      if (task.state === "canceled") {
+        continue;
+      }
+
       this.active.push(task);
       this.emit("taskStart", task);
-      task.start();
+
+      // Handle task completion/error
+      const onFinish = () => {
+        this.active = this.active.filter((t) => t !== task);
+        task.off("complete", onComplete);
+        task.off("error", onError);
+        task.off("cancel", onCancel);
+        this.run(); // Try to run next task
+      };
 
       const onComplete = () => {
-        this.active = this.active.filter((t) => t !== task);
         this.emit("taskComplete", task);
-        task.off("complete", onComplete);
-        this.run();
+        onFinish();
+      };
+
+      const onError = () => {
+        this.emit("taskError", task);
+        onFinish();
+      };
+
+      const onCancel = () => {
+        this.emit("taskCancel", task);
+        onFinish();
       };
 
       task.on("complete", onComplete);
-      task.on("error", () => {
-        this.active = this.active.filter((t) => t !== task);
-        this.emit("taskError", task);
-        this.run();
-      });
+      task.on("error", onError);
+      task.on("cancel", onCancel);
 
-      await wait(50); // small delay to avoid race
+      task.start();
     }
 
-    if (this.queue.length === 0 && this.active.length === 0) {
+    if (this.running && this.queue.length === 0 && this.active.length === 0) {
       this.running = false;
       this.emit("empty");
     }

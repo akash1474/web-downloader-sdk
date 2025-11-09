@@ -1,4 +1,5 @@
 import { DownloadManager } from "./lib/DownloadManager.js";
+import { DownloadTask } from "./lib/DownloadTask.js";
 
 const manager = new DownloadManager();
 const urls: { url: string; filename: string }[] = [
@@ -26,13 +27,13 @@ startBtn.addEventListener("click", async () => {
   job.on("start", () => console.log("Job started"));
   job.on("complete", () => console.log("Job complete"));
 
-  job.tasks.forEach((task) => {
+  job.tasks.forEach((task: DownloadTask) => {
     // Create task UI
     const wrapper = document.createElement("div");
     wrapper.className = "p-4 bg-white rounded shadow";
 
     const name = document.createElement("p");
-    name.textContent = `Downloading: ${task.url}`;
+    name.textContent = `Downloading: ${task.filename}`;
     name.className = "font-medium";
 
     const progress = document.createElement("div");
@@ -64,15 +65,26 @@ startBtn.addEventListener("click", async () => {
     });
     task.on("pause", () => console.log("Task paused", task.url));
     task.on("resume", () => console.log("Task resumed", task.url));
-    task.on("complete", () => {
+
+    // Remember, task 'complete' now emits the blob
+    task.on("complete", (blob: Blob) => {
       bar.classList.remove("bg-blue-600");
       bar.classList.add("bg-green-600");
-      console.log("Task complete", task.url);
+      console.log("Task complete", task.url, "Blob size:", blob.size);
+
+      // Now you can handle the blob (e.g., offer a save link)
+      const saveLink = document.createElement("a");
+      saveLink.href = URL.createObjectURL(blob);
+      saveLink.download = task.filename;
+      saveLink.textContent = `Save ${task.filename}`;
+      saveLink.className = "text-blue-600 underline ml-4";
+      controls.appendChild(saveLink);
     });
 
     pauseBtn.addEventListener("click", () => task.pause());
     resumeBtn.addEventListener("click", () => task.resume());
   });
 
-  job.start();
+  // *** FIX: You must pass the job to startJob ***
+  manager.startJob(job);
 });

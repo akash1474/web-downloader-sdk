@@ -4,7 +4,9 @@ export class EventEmitter {
   private listeners: Map<string, EventHandler[]> = new Map();
 
   on<T = any>(event: string, handler: EventHandler<T>): void {
-    if (!this.listeners.has(event)) this.listeners.set(event, []);
+    if (!this.listeners.has(event)) {
+      this.listeners.set(event, []);
+    }
     this.listeners.get(event)!.push(handler);
   }
 
@@ -12,13 +14,18 @@ export class EventEmitter {
     const handlers = this.listeners.get(event);
     if (!handlers) return;
     const index = handlers.indexOf(handler);
-    if (index > -1) handlers.splice(index, 1);
+    if (index > -1) {
+      handlers.splice(index, 1);
+    }
   }
 
   emit<T = any>(event: string, payload?: T): void {
     const handlers = this.listeners.get(event);
     if (!handlers) return;
-    for (const handler of handlers) handler(payload!);
+    // Use a copy in case handlers are modified during iteration
+    for (const handler of [...handlers]) {
+      handler(payload);
+    }
   }
 
   clear(): void {
