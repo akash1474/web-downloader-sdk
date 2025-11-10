@@ -28,9 +28,10 @@ export interface DownloadTaskProgress {
 }
 
 // --- Dynamic Chunk Size Constants (UPDATED) ---
-const DEFAULT_CHUNK_SIZE = 1024 * 1024 * 20; // 20MB (min/fallback)
+const DEFAULT_CHUNK_SIZE = 1024 * 1024 * 10; // 5MB (min/fallback)
 const MAX_CHUNK_SIZE = 1024 * 1024 * 100; // 100MB (max)
-const TARGET_CHUNK_COUNT = 100; // Aim for 100 chunks
+const TARGET_CHUNK_COUNT = 50; // Aim for 100 chunks
+const CONNECTION_CLEANUP_DELAY = 50;
 
 export class DownloadTask extends EventEmitter {
 	url: string;
@@ -42,6 +43,9 @@ export class DownloadTask extends EventEmitter {
 	private supportsResume = true;
 	private chunkIndex = 0;
 	private chunkSize = DEFAULT_CHUNK_SIZE; // Default, will be updated
+	private retryCount = 0;
+	private maxRetries = 3;
+	private retryDelay = 1000;
 
 	constructor(url: string, filename: string, supportsResume = true) {
 		super();
@@ -146,6 +150,8 @@ export class DownloadTask extends EventEmitter {
 			DEFAULT_CHUNK_SIZE,
 			Math.min(dynamicSize, MAX_CHUNK_SIZE)
 		);
+
+		console.log(`Chunk Size:${this.chunkSize / (1024 * 1024)}MB`);
 	}
 
 	pause() {
@@ -154,14 +160,15 @@ export class DownloadTask extends EventEmitter {
 		this.emit("pause");
 
 		if (this.xhr) {
-			// Detach listeners *before* aborting
-			this.xhr.onprogress = null;
-			this.xhr.onload = null;
-			this.xhr.onerror = null;
-			this.xhr.onabort = null;
-
-			this.xhr.abort();
+			const currentXhr = this.xhr;
 			this.xhr = null;
+
+			// Then detach listeners and abort
+			currentXhr.onprogress = null;
+			currentXhr.onload = null;
+			currentXhr.onerror = null;
+			currentXhr.onabort = null;
+			currentXhr.abort();
 		}
 	}
 
@@ -177,14 +184,16 @@ export class DownloadTask extends EventEmitter {
 		this.emit("cancel");
 
 		if (this.xhr) {
-			// Detach listeners *before* aborting
-			this.xhr.onprogress = null;
-			this.xhr.onload = null;
-			this.xhr.onerror = null;
-			this.xhr.onabort = null;
-
-			this.xhr.abort();
+			// Detach listeners before aborting
+			const currentXhr = this.xhr;
 			this.xhr = null;
+
+			// Then detach listeners and abort
+			currentXhr.onprogress = null;
+			currentXhr.onload = null;
+			currentXhr.onerror = null;
+			currentXhr.onabort = null;
+			currentXhr.abort();
 		}
 
 		// Clear all data for this task
@@ -194,33 +203,45 @@ export class DownloadTask extends EventEmitter {
 
 	private async downloadNextChunk() {
 		if (this.state !== "downloading") return;
-		if (!isOnline()) {
-			this.emit("networkLost");
-			// Don't error out, just pause.
-			this.changeState("paused");
-			return;
+
+		try {
+			if (!isOnline()) {
+				this.emit("networkLost");
+				// Don't error out, just pause.
+				this.changeState("paused");
+				return;
+			}
+
+			// Check if download is already complete
+			if (this.totalBytes > 0 && this.downloadedBytes >= this.totalBytes) {
+				this.assembleFile();
+				return;
+			}
+
+			// Calculate range for next chunk
+			const startByte = this.chunkIndex * this.chunkSize;
+			let endByte: number | string = startByte + this.chunkSize - 1;
+
+			if (this.totalBytes > 0 && endByte >= this.totalBytes) {
+				endByte = this.totalBytes - 1;
+			}
+
+			// For the last chunk, endByte might be unknown, so don't set it
+			if (endByte < startByte) {
+				endByte = ""; // Request all remaining bytes
+			}
+
+			this.createXHR(startByte, endByte);
+		} catch (error) {
+			if (this.retryCount < this.maxRetries && error instanceof NetworkError) {
+				this.retryCount++;
+				const delay = this.retryDelay * Math.pow(2, this.retryCount - 1);
+				await new Promise((resolve) => setTimeout(resolve, delay));
+				this.downloadNextChunk(); // Retry
+			} else {
+				this.handleError(error);
+			}
 		}
-
-		// Check if download is already complete
-		if (this.totalBytes > 0 && this.downloadedBytes >= this.totalBytes) {
-			this.assembleFile();
-			return;
-		}
-
-		// Calculate range for next chunk
-		const startByte = this.chunkIndex * this.chunkSize;
-		let endByte: number | string = startByte + this.chunkSize - 1;
-
-		if (this.totalBytes > 0 && endByte >= this.totalBytes) {
-			endByte = this.totalBytes - 1;
-		}
-
-		// For the last chunk, endByte might be unknown, so don't set it
-		if (endByte < startByte) {
-			endByte = ""; // Request all remaining bytes
-		}
-
-		this.createXHR(startByte, endByte);
 	}
 
 	private createXHR(startByte: number, endByte: number | string) {
@@ -285,6 +306,9 @@ export class DownloadTask extends EventEmitter {
 			try {
 				// --- Server Resume Support Check ---
 				if (xhr.status === 200 && startByte > 0) {
+					console.log(
+						"⚠️ Server doesn't support resume (200 OK for non-zero start)"
+					);
 					// Server sent 200 OK instead of 206 Partial. It doesn't support resume.
 					this.supportsResume = false;
 					this.downloadedBytes = blob.size;
@@ -293,7 +317,6 @@ export class DownloadTask extends EventEmitter {
 					// We must clear old data and restart from scratch
 					await downloaderDB.clearChunks(this.url);
 					this.chunkIndex = 0;
-
 					// Save this one chunk (the whole file)
 					await downloaderDB.saveChunk({
 						url: this.url,
@@ -309,6 +332,7 @@ export class DownloadTask extends EventEmitter {
 							this.totalBytes = discoveredTotal;
 							wasFirstChunk = true;
 						} else {
+							console.error("❌ No Content-Range header found");
 							this.handleError(
 								new UnsupportedServerErorr(
 									"Server did not provide Content-Range header for chunked download."
@@ -343,6 +367,7 @@ export class DownloadTask extends EventEmitter {
 					});
 				}
 			} catch (err) {
+				console.error("❌ Error saving chunk:", err);
 				// Handle Quota Error
 				if (err instanceof DOMException && err.name === "QuotaExceededError") {
 					this.handleError(new QuotaError());
@@ -374,8 +399,15 @@ export class DownloadTask extends EventEmitter {
 
 				// Move to next chunk
 				this.chunkIndex++;
+
+				// This prevents Keep-Alive race conditions
+				await new Promise((resolve) =>
+					setTimeout(resolve, CONNECTION_CLEANUP_DELAY)
+				);
+
 				this.downloadNextChunk(); // Continue loop
 			} else {
+				console.log("🎉 Download complete! Assembling file...");
 				// The download IS finished.
 				// Save final metadata, then assemble.
 				await downloaderDB.saveMetadata({
@@ -397,7 +429,7 @@ export class DownloadTask extends EventEmitter {
 
 		xhr.onabort = () => {
 			// This check is now safe, as pause/cancel will detach it.
-			// This will only run for *truly* unexpected aborts.
+			// This will only run for truly unexpected aborts.
 			if (this.state === "paused" || this.state === "canceled") return;
 			this.handleError(new NetworkError("Aborted unexpectedly"));
 			this.xhr = null; // Clean up

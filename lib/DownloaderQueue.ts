@@ -7,6 +7,7 @@ export class DownloaderQueue extends EventEmitter {
   private active: DownloadTask[] = [];
   private concurrency: number;
   private running = false;
+  private isProcessing = false;
 
   constructor(concurrency = 2) {
     super();
@@ -45,6 +46,8 @@ export class DownloaderQueue extends EventEmitter {
   }
 
   private async run() {
+    if (this.isProcessing) return; // Prevent concurrent runs
+    this.isProcessing = true;
     while (
       this.running &&
       this.active.length < this.concurrency &&
@@ -90,6 +93,7 @@ export class DownloaderQueue extends EventEmitter {
 
       task.start();
     }
+    this.isProcessing = false;
 
     if (this.running && this.queue.length === 0 && this.active.length === 0) {
       this.running = false;

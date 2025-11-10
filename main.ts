@@ -28,6 +28,10 @@ const urls: { url: string; filename: string }[] = [
     filename: "large.zip",
   },
   {
+    url: "http://localhost:3000/Lazy Programmers.pdf",
+    filename: "Lazy Programmers.pdf",
+  },
+  {
     url: "http://localhost:3000/Sapphire - Ed Sheeran.mp3",
     filename: "Sapphire - Ed Sheeran.mp3",
   },
@@ -38,6 +42,8 @@ const jobsDiv = document.getElementById("jobs") as HTMLDivElement;
 
 // Keep a list of all tasks for the network listener
 const allTasks: DownloadTask[] = [];
+// *** NEW: Keep a map of tasks that failed due to network errors ***
+const networkErrorTasks: Map<DownloadTask, NetworkError> = new Map();
 
 startBtn.addEventListener("click", async () => {
   if (!urls.length) return alert("No URLs added!");
@@ -47,8 +53,57 @@ startBtn.addEventListener("click", async () => {
     urls.map((u) => u.filename),
   );
 
+  // Create a wrapper for the entire job (progress bar + tasks)
+  const jobWrapper = document.createElement("div");
+  jobWrapper.className = "p-4 bg-gray-100 rounded-lg shadow-md space-y-4";
+  jobsDiv.appendChild(jobWrapper);
+
+  // --- Create Job-Level UI ---
+  const jobTitle = document.createElement("h2");
+  jobTitle.textContent = "Overall Job Progress";
+  jobTitle.className = "text-xl font-semibold text-gray-800";
+
+  const jobProgress = document.createElement("div");
+  jobProgress.className = "w-full bg-gray-300 rounded h-4 overflow-hidden";
+  const jobBar = document.createElement("div");
+  jobBar.className = "bg-green-600 h-4 w-0 transition-all";
+  jobProgress.appendChild(jobBar);
+
+  const jobProgressText = document.createElement("p");
+  jobProgressText.className = "text-sm text-gray-600 mt-1";
+  jobProgressText.textContent = "0% (0 Bytes / 0 Bytes)";
+
+  jobWrapper.append(jobTitle, jobProgress, jobProgressText);
+
   job.on("start", () => console.log("Job started"));
-  job.on("complete", () => console.log("Job complete"));
+
+  // *** MERGED job.on('complete') listener ***
+  job.on("complete", () => {
+    console.log("Job complete");
+    jobTitle.textContent = "Job Complete";
+    jobBar.classList.remove("bg-green-600");
+    jobBar.classList.add("bg-green-500");
+
+    // --- Check status of all tasks ---
+    console.log("--- Final Task Status ---");
+    job.tasks.forEach((task) => {
+      if (task.state === "completed") {
+        console.log(`✅ ${task.filename}: ${task.state}`);
+      } else {
+        // This will catch 'error' or any other non-complete state
+        console.log(`❌ ${task.filename}: ${task.state}`);
+      }
+    });
+    console.log("-------------------------");
+  });
+
+  // Listen to the job's overall progress
+  job.on("progress", ({ loaded, total, percent }) => {
+    jobBar.style.width = `${percent}%`;
+    jobProgressText.textContent = `${percent.toFixed(2)}% (${formatBytes(
+      loaded,
+    )} / ${formatBytes(total)})`;
+  });
 
   job.tasks.forEach((task: DownloadTask) => {
     // Add task to our global list
@@ -59,7 +114,7 @@ startBtn.addEventListener("click", async () => {
     wrapper.className = "p-4 bg-white rounded shadow";
 
     const name = document.createElement("p");
-    name.textContent = `Downloading: ${task.filename}`;
+    name.textContent = `File: ${task.filename}`;
     name.className = "font-medium";
 
     const progress = document.createElement("div");
@@ -72,7 +127,6 @@ startBtn.addEventListener("click", async () => {
     statusText.className = "text-sm text-gray-500 mt-2";
     statusText.textContent = "State: idle";
 
-    // NEW: Progress text
     const progressText = document.createElement("p");
     progressText.className = "text-sm text-gray-500 mt-1";
     progressText.textContent = "0% (0 Bytes / 0 Bytes)";
@@ -80,13 +134,11 @@ startBtn.addEventListener("click", async () => {
     const controls = document.createElement("div");
     controls.className = "flex gap-3 mt-3";
 
-    // NEW: Toggle button
     const toggleBtn = document.createElement("button");
     toggleBtn.textContent = "⏸ Pause";
     toggleBtn.className = "bg-yellow-500 text-white px-3 py-1 rounded";
     toggleBtn.disabled = true; // Disabled until download starts
 
-    // NEW: Cancel button
     const cancelBtn = document.createElement("button");
     cancelBtn.textContent = "❌ Cancel";
     cancelBtn.className = "bg-red-600 text-white px-3 py-1 rounded";
@@ -95,20 +147,22 @@ startBtn.addEventListener("click", async () => {
     controls.appendChild(cancelBtn);
 
     wrapper.append(name, progress, statusText, progressText, controls);
-    jobsDiv.appendChild(wrapper);
+    // Append task UI to the job's wrapper
+    jobWrapper.appendChild(wrapper);
 
     // --- Attach Event Listeners ---
-
-    // Listen for state changes to update UI
     task.on("stateChange", (state) => {
       statusText.textContent = `State: ${state}`;
 
       switch (state) {
         case "downloading":
+        case "fetching_metadata":
           toggleBtn.textContent = "⏸ Pause";
           toggleBtn.className = "bg-yellow-500 text-white px-3 py-1 rounded";
           toggleBtn.disabled = false;
           cancelBtn.disabled = false;
+          // Clear from network error map on state change
+          networkErrorTasks.delete(task);
           break;
         case "paused":
           toggleBtn.textContent = "▶ Resume";
@@ -126,6 +180,7 @@ startBtn.addEventListener("click", async () => {
           toggleBtn.textContent = state === "completed" ? "Done" : "Canceled";
           toggleBtn.disabled = true;
           cancelBtn.disabled = true;
+          networkErrorTasks.delete(task); // Clean up
           break;
         case "idle":
           toggleBtn.disabled = true;
@@ -166,6 +221,8 @@ startBtn.addEventListener("click", async () => {
 
       if (err instanceof NetworkError) {
         statusText.textContent = "Error: Network lost. Will retry...";
+        // *** NEW: Add to retry map ***
+        networkErrorTasks.set(task, err);
       } else if (err instanceof QuotaError) {
         statusText.textContent = "Error: Not enough disk space.";
       } else if (err instanceof HttpError) {
@@ -180,7 +237,6 @@ startBtn.addEventListener("click", async () => {
     });
 
     // --- Attach Button Click Handlers ---
-
     toggleBtn.addEventListener("click", () => {
       if (task.state === "downloading") {
         task.pause();
@@ -200,14 +256,14 @@ startBtn.addEventListener("click", async () => {
 // Global network status listener
 window.addEventListener("online", () => {
   console.log("Network connection restored!");
-  for (const task of allTasks) {
-    // Check if the task is in an error state
+  // *** UPDATED: Only retry tasks that failed from a network error ***
+  for (const task of networkErrorTasks.keys()) {
     if (task.state === "error") {
-      // We can't easily know *why* it errored, so let's just retry all.
-      // The task.start() is smart and will use resume data if available.
-      // This is a simple retry logic.
-      console.log(`Retrying task: ${task.filename}`);
-      task.start();
+      console.log(`Retrying task (network): ${task.filename}`);
+      task.start(); // This will clear the error state on its own
+    } else {
+      // Task is no longer in an error state, clean up map
+      networkErrorTasks.delete(task);
     }
   }
 });
