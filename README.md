@@ -31,37 +31,6 @@ Think of it as a professional kitchen:
     |
     `--(Owns)--> [ DownloadTask ]
 ```
-
-------
-
-### 📊 Architecture Diagram
-
-
-
-Here's a simple diagram of the component hierarchy and event flow:
-
-```
-[ main.ts (UI) ]
-    |
-    | .createJob(), .startJob()
-    | .on("jobProgress"), .on("taskError")
-    V
-[ DownloadManager ]  <-- (Owns) -->  [ DownloaderQueue ]
-    |                                      |
-    | .on("progress"), .on("complete")       | .add(task), .start()
-    |                                      |
-    V                                      V
-[ DownloadJob ]                            [ DownloadTask ]
-    |                                      |
-    | .on("progress"), .on("complete")       | .start()
-    |                                      V
-    `--(Owns)--> [ DownloadTask ]  <-----> [ storage.ts (IndexedDB) ]
-    |
-    `--(Owns)--> [ DownloadTask ]
-    |
-    `--(Owns)--> [ DownloadTask ]
-```
-
 ------
 
 ### 💡 Key Design Patterns
