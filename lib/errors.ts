@@ -38,7 +38,7 @@ export class HttpError extends DownloaderError {
  * Thrown when the server doesn't support the features
  * required for chunked downloading (like 'Content-Range').
  */
-export class UnsupportedServerErorr extends DownloaderError {
+export class UnsupportedServerError extends DownloaderError {
   constructor(message: string) {
     super(message);
   }

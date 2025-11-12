@@ -1,8 +1,7 @@
-import { EventEmitter } from "./events";
 import { DownloadTask } from "./DownloadTask";
 import { wait } from "./utils"; // 'wait' is no longer used, could be removed
 
-export class DownloaderQueue extends EventEmitter {
+export class DownloaderQueue{
   private queue: DownloadTask[] = [];
   private active: DownloadTask[] = [];
   private concurrency: number;
@@ -10,13 +9,11 @@ export class DownloaderQueue extends EventEmitter {
   private isProcessing = false;
 
   constructor(concurrency = 2) {
-    super();
     this.concurrency = concurrency;
   }
 
   add(task: DownloadTask) {
     this.queue.push(task);
-    this.emit("queueAdd", task);
     if (this.running) {
       this.run();
     }
@@ -25,13 +22,11 @@ export class DownloaderQueue extends EventEmitter {
   start() {
     if (this.running) return;
     this.running = true;
-    this.emit("start");
     this.run();
   }
 
   pause() {
     this.running = false;
-    this.emit("pause");
     // We also pause active tasks, but tasks in the queue are just "not started"
     this.active.forEach((t) => t.pause());
   }
@@ -42,7 +37,6 @@ export class DownloaderQueue extends EventEmitter {
     this.active.forEach((t) => t.cancel());
     this.active = [];
     this.running = false;
-    this.emit("clear");
   }
 
   private async run() {
@@ -61,7 +55,6 @@ export class DownloaderQueue extends EventEmitter {
       }
 
       this.active.push(task);
-      this.emit("taskStart", task);
 
       // Handle task completion/error
       const onFinish = () => {
@@ -73,17 +66,14 @@ export class DownloaderQueue extends EventEmitter {
       };
 
       const onComplete = () => {
-        this.emit("taskComplete", task);
         onFinish();
       };
 
       const onError = () => {
-        this.emit("taskError", task);
         onFinish();
       };
 
       const onCancel = () => {
-        this.emit("taskCancel", task);
         onFinish();
       };
 
@@ -97,7 +87,6 @@ export class DownloaderQueue extends EventEmitter {
 
     if (this.running && this.queue.length === 0 && this.active.length === 0) {
       this.running = false;
-      this.emit("empty");
     }
   }
 }

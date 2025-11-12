@@ -11,6 +11,9 @@ export interface JobProgress {
 export class DownloadJob extends EventEmitter {
   tasks: DownloadTask[];
   private completed = 0;
+  private errors = 0;
+  private jobTotalLoaded = 0;
+  private jobTotalSize = 0;
   private taskProgress: Map<DownloadTask, { loaded: number; total: number }> =
     new Map();
 
@@ -28,21 +31,22 @@ export class DownloadJob extends EventEmitter {
       task.on("start", () => this.emit("taskStart", task));
 
       task.on("progress", (p: DownloadTaskProgress) => {
+        // Get the previous progress for this task
+        const oldProg = this.taskProgress.get(task)!;
+
+        // Update the job totals using the difference
+        this.jobTotalLoaded = this.jobTotalLoaded - oldProg.loaded + p.loaded;
+        this.jobTotalSize = this.jobTotalSize - oldProg.total + p.total;
+
         // Store this task's progress
         this.taskProgress.set(task, { loaded: p.loaded, total: p.total });
 
-        // Recalculate total job progress
-        let totalLoaded = 0;
-        let totalSize = 0;
-        for (const prog of this.taskProgress.values()) {
-          totalLoaded += prog.loaded;
-          totalSize += prog.total;
-        }
+        // Recalculate percent
+        const percent = calculatePercent(this.jobTotalLoaded, this.jobTotalSize);
 
-        const percent = calculatePercent(totalLoaded, totalSize);
         this.emit("progress", {
-          loaded: totalLoaded,
-          total: totalSize,
+          loaded: this.jobTotalLoaded,
+          total: this.jobTotalSize,
           percent: percent,
         });
 
@@ -52,16 +56,21 @@ export class DownloadJob extends EventEmitter {
 
       task.on("complete", (blob: Blob) => {
         this.completed++;
-        // Pass the blob up
-        this.emit("taskComplete", { task, blob });
-        if (this.completed === this.tasks.length) {
-          this.emit("complete");
-        }
+        this.emit("taskComplete", { task, blob }); // Pass the blob up
+        this.checkJobFinished();
       });
 
-      task.on("error", (e: Error) =>
-        this.emit("taskError", { task, error: e }),
-      );
+      task.on("error", (e: Error) => {
+        this.errors++;
+        this.emit("taskError", { task, error: e });
+        this.checkJobFinished();
+      });
+    }
+  }
+
+  private checkJobFinished() {
+    if (this.completed + this.errors === this.tasks.length) {
+      this.emit("complete");
     }
   }
 }

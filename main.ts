@@ -6,7 +6,7 @@ import {
   HttpError,
   QuotaError,
   AssemblyError,
-  UnsupportedServerErorr,
+  UnsupportedServerError,
 } from "./lib/errors.js";
 
 /**
@@ -227,7 +227,7 @@ startBtn.addEventListener("click", async () => {
         statusText.textContent = "Error: Not enough disk space.";
       } else if (err instanceof HttpError) {
         statusText.textContent = `Error: Server failed (${err.statusCode}).`;
-      } else if (err instanceof UnsupportedServerErorr) {
+      } else if (err instanceof UnsupportedServerError) {
         statusText.textContent = "Error: Server does not support resume.";
       } else if (err instanceof AssemblyError) {
         statusText.textContent = "Error: Download corrupted. Please CANCEL.";

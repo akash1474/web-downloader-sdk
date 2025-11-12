@@ -1,16 +1,12 @@
-import { EventEmitter } from "./events";
 import { DownloadJob, JobProgress } from "./DownloadJob";
 import { DownloaderQueue } from "./DownloaderQueue";
-import { DownloadTask } from "./DownloadTask";
 
-export class DownloadManager extends EventEmitter {
+export class DownloadManager {
 	private jobs: DownloadJob[] = [];
 	private queue: DownloaderQueue;
 
 	constructor(concurrency = 2) {
-		super();
 		this.queue = new DownloaderQueue(concurrency);
-		this.attachQueueEvents();
 
 		// Ensure proper cleanup on page unload
 		window.addEventListener("beforeunload", () => {
@@ -21,8 +17,6 @@ export class DownloadManager extends EventEmitter {
 	createJob(urls: string[], filenames: string[]): DownloadJob {
 		const job = new DownloadJob(urls, filenames);
 		this.jobs.push(job);
-		this.emit("jobCreated", job);
-		this.attachJobEvents(job);
 		return job;
 	}
 
@@ -60,32 +54,5 @@ export class DownloadManager extends EventEmitter {
 
 	resumeAll() {
 		this.queue.start();
-	}
-
-	private attachJobEvents(job: DownloadJob) {
-		job.on("start", () => this.emit("jobStart", job));
-		job.on("progress", (p: JobProgress) =>
-			this.emit("jobProgress", { job, progress: p })
-		);
-		job.on("complete", () => this.emit("jobComplete", job));
-
-		// Bubble up task-level events, prefixed with the job
-		job.on("taskStart", (task: DownloadTask) =>
-			this.emit("taskStart", { job, task })
-		);
-		job.on("taskComplete", (data: { task: DownloadTask; blob: Blob }) =>
-			this.emit("taskComplete", { job, task: data.task, blob: data.blob })
-		);
-		job.on("taskError", (data: { task: DownloadTask; error: Error }) =>
-			this.emit("taskError", { job, task: data.task, error: data.error })
-		);
-	}
-
-	private attachQueueEvents() {
-		// These are low-level events. We let the job events be the primary source
-		// but these could be useful for debugging.
-		this.queue.on("start", () => this.emit("queueStart"));
-		this.queue.on("pause", () => this.emit("queuePause"));
-		this.queue.on("empty", () => this.emit("queueEmpty"));
 	}
 }
