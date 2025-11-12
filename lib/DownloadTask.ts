@@ -1,6 +1,6 @@
 import { EventEmitter } from "./events";
 import { calculatePercent, isOnline } from "./utils";
-import { downloadStorage, TaskMetadata } from "./storage";
+import { downloadStorage } from "./storage";
 // Import the new errors
 import {
   DownloaderError,
@@ -496,37 +496,55 @@ export class DownloadTask extends EventEmitter {
     this.changeState("assembling");
     try {
       const chunks = await downloadStorage.getChunks(this.url);
+
+      // 1. Check if we have chunks at all
       if (chunks.length === 0) {
         this.handleError(new AssemblyError("No chunks found to assemble."));
         return;
       }
 
+      // 2. INTEGRITY CHECK: Verify we have no "holes" in the chunks
+      // Since we sorted them in storage, index 0 should be 0, index 1 should be 1...
+      for (let i = 0; i < chunks.length; i++) {
+        if (chunks[i].index !== i) {
+          throw new Error(
+            `Missing chunk at index ${i}. Found index ${chunks[i].index} instead.`,
+          );
+        }
+      }
+
+      // 3. Create the Blob (This is where OOM happens for large files)
       const fileBlob = new Blob(chunks.map((c) => c.blob));
 
-      // Verify file size
+      // 4. Verify size
       if (this.totalBytes > 0 && fileBlob.size !== this.totalBytes) {
         this.handleError(
           new AssemblyError(
             `Assembled file size mismatch. Expected ${this.totalBytes}, got ${fileBlob.size}`,
           ),
         );
-
-        // Clean up data related to this downloadTask
+        // Don't return here, ensure cleanup runs
         await downloadStorage.clearMetadata(this.url);
         await downloadStorage.clearChunks(this.url);
         return;
       }
 
       this.changeState("completed");
-      this.emit("complete", fileBlob); // Emit final assembled blob
+      this.emit("complete", fileBlob);
 
       // Clean up
       await downloadStorage.clearMetadata(this.url);
       await downloadStorage.clearChunks(this.url);
     } catch (err) {
+      // LOG THE ACTUAL ERROR to see if it's memory related
+      console.error("Critical Assembly Error:", err);
+
       this.handleError(
         new AssemblyError(`File assembly failed: ${err.message}`),
       );
+      // Ensure cleanup happens even on error
+      await downloadStorage.clearMetadata(this.url);
+      await downloadStorage.clearChunks(this.url);
     }
   }
 

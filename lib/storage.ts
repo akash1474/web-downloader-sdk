@@ -76,8 +76,12 @@ class DownloadStorage {
     const index = tx.store.index("url_index");
 
     // Check via the composite index if this specific chunk already exists
-    const existing = await index.get([chunk.url, chunk.index]);
-    if (!existing) {
+    const existingKey = await index.getKey([chunk.url, chunk.index]);
+    if (existingKey) {
+      // Overwrite existing record using its primary key
+      await tx.store.put({ ...chunk }, existingKey);
+    } else {
+      // Add new record
       await tx.store.add(chunk);
     }
     await tx.done; // Wait for transaction to commit
